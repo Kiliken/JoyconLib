@@ -247,6 +247,13 @@ public class Joycon
 	public int Attach(byte leds_ = 0x0)
     {
         state = state_.ATTACHED;
+
+        // Nintendo USB HID notes: the controller must be forced into USB mode,
+        // otherwise it may time out and fall back to Bluetooth.
+        SendUSBCommand(0x02, null, false);
+        SendUSBCommand(0x03, null, false);
+        SendUSBCommand(0x04, null, false);
+
         byte[] a = { 0x0 };
         // Input report mode
         Subcommand(0x3, new byte[] { 0x3f }, 1, false);
@@ -278,6 +285,8 @@ public class Joycon
         PrintArray(sum, format: "Sum {0:S}", d: DebugType.IMU);
         if (state > state_.NO_JOYCONS)
         {
+            // Allow the device to revert to Bluetooth timeout mode when we are done.
+            SendUSBCommand(0x05, null, false);
             Subcommand(0x30, new byte[] { 0x0 }, 1);
             Subcommand(0x40, new byte[] { 0x0 }, 1);
             Subcommand(0x48, new byte[] { 0x0 }, 1);
@@ -567,6 +576,32 @@ public class Joycon
         PrintArray(buf_, DebugType.RUMBLE, format: "Rumble data sent: {0:S}");
         HIDapi.hid_write(handle, buf_, new UIntPtr(report_len));
     }
+    private void SendUSBCommand(byte cmd, byte[] payload = null, bool expectResponse = true)
+    {
+        if (handle == IntPtr.Zero)
+            return;
+
+        int length = 2 + (payload == null ? 0 : payload.Length);
+        byte[] buf = new byte[length];
+        buf[0] = 0x80;
+        buf[1] = cmd;
+        if (payload != null)
+        {
+            Array.Copy(payload, 0, buf, 2, payload.Length);
+        }
+
+        HIDapi.hid_write(handle, buf, new UIntPtr((uint)length));
+
+        if (!expectResponse)
+            return;
+
+        byte[] response = new byte[report_len];
+        int res = HIDapi.hid_read_timeout(handle, response, new UIntPtr(report_len), 50);
+        if (res > 0)
+        {
+            PrintArray(response, DebugType.COMMS, (uint)res, 0, "USB HID command 0x80 " + string.Format("{0:X2}", cmd) + " response: {0:S}");
+        }
+    }
     private byte[] Subcommand(byte sc, byte[] buf, uint len, bool print = true)
     {
         byte[] buf_ = new byte[report_len];
@@ -621,7 +656,7 @@ public class Joycon
         gyr_neutral[2] = (Int16)(buf_[4] | ((buf_[5] << 8) & 0xff00));
         PrintArray(gyr_neutral, len: 3, d: DebugType.IMU, format: "User gyro neutral position: {0:S}");
 
-        // This is an extremely messy way of checking to see whether there is user stick calibration data present, but I've seen conflicting user calibration data on blank Joy-Cons. Worth another look eventually.
+        // This is an extremely messy way of checking to see whether there is user stick calibration data present, but I've seen conflicting user calibration data on blank Joy-Cons. Worth another[...]
         if (gyr_neutral[0] + gyr_neutral[1] + gyr_neutral[2] == -3 || Math.Abs(gyr_neutral[0]) > 100 || Math.Abs(gyr_neutral[1]) > 100 || Math.Abs(gyr_neutral[2]) > 100)
         {
             buf_ = ReadSPI(0x60, 0x29, 10);
